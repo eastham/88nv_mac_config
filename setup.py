@@ -8,12 +8,6 @@ Usage:
 
 Options:
     --config PATH         Path to config.md (default: same dir as this script)
-    --ip IP               Override STATIC_IP from config.md
-    --subnet MASK         Override SUBNET from config.md
-    --gateway GW          Override GATEWAY from config.md
-    --dns DNS             Override DNS from config.md
-    --hostname NAME       Override HOSTNAME from config.md
-    --disable-wifi        Override DISABLE_WIFI to true
     --skip-install        Skip software install steps (network/hostname only)
     --dry-run             Print commands without executing them
 """
@@ -70,34 +64,24 @@ def parse_config(path):
 
     config = {}
     current_section = None
-    i = 0
-    while i < len(tokens):
-        tok = tokens[i]
-
-        # Section heading
+    for i, tok in enumerate(tokens):
         if tok.type == "heading_open":
             content_tok = tokens[i + 1] if i + 1 < len(tokens) else None
             if content_tok and content_tok.type == "inline":
-                current_section = content_tok.content.strip()
+                current_section = content_tok.content.split()[0].strip()
                 config[current_section] = {}
-            i += 1
-
-        # Table rows: scan for tr/td patterns
-        elif tok.type == "tr_open" and current_section:
-            # Collect td inline contents
-            cells = []
-            j = i + 1
-            while j < len(tokens) and tokens[j].type != "tr_close":
-                if tokens[j].type == "inline":
-                    cells.append(tokens[j].content.strip())
-                j += 1
-            if len(cells) == 2:
-                key, val = cells[0], cells[1]
-                if key != "Key":  # skip header row
-                    config[current_section][key] = val
-            i = j
-
-        i += 1
+        elif tok.type == "inline" and current_section:
+            first_data_row = True
+            for line in tok.content.splitlines():
+                cells = [c.strip() for c in line.strip().strip("|").split("|")]
+                if len(cells) != 2 or not cells[0]:
+                    continue
+                if re.match(r'^[-:| ]+$', cells[0]):  # separator row
+                    continue
+                if first_data_row:  # header row
+                    first_data_row = False
+                    continue
+                config[current_section][cells[0]] = cells[1]
 
     return config
 
@@ -111,9 +95,10 @@ def run(cmd, *, check=True, capture=False, sudo=False):
         cmd = ["sudo"] + (cmd if isinstance(cmd, list) else cmd.split())
     if isinstance(cmd, str):
         cmd = cmd.split()
-    _print(f"  + {' '.join(cmd)}")
-    if dry_run:
+    if dry_run and not capture:
+        _print(f"  + {' '.join(cmd)}")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    _print(f"  + {' '.join(cmd)}")
     kwargs = {"check": check}
     if capture:
         kwargs["capture_output"] = True
@@ -135,58 +120,71 @@ def run_shell(cmd_str, *, check=True, sudo=False):
 
 # ── steps ─────────────────────────────────────────────────────────────────────
 
-def step_network(net, ip, disable_wifi):
+def _detect_interfaces():
+    """Return (eth_iface, wifi_iface) from networksetup; either may be None."""
+    if dry_run:
+        return "en0", "en1"
+    result = run(["networksetup", "-listallhardwareports"], capture=True)
+    lines = result.stdout.splitlines()
+    eth = wifi = None
+    for idx, line in enumerate(lines):
+        if not eth and ("Ethernet" in line or "USB 10/100" in line or "Thunderbolt" in line):
+            for sub in lines[idx:idx+5]:
+                m = re.search(r"Device:\s+(\S+)", sub)
+                if m:
+                    eth = m.group(1)
+                    break
+        if not wifi and ("Wi-Fi" in line or "AirPort" in line):
+            for sub in lines[idx:idx+5]:
+                m = re.search(r"Device:\s+(\S+)", sub)
+                if m:
+                    wifi = m.group(1)
+                    break
+    return eth, wifi
+
+
+def _configure_iface(iface, ip, net):
+    """Apply static IP or DHCP to iface. Returns True on success."""
+    if ip.lower() == "dhcp":
+        run(["networksetup", "-setdhcp", iface], sudo=True)
+        _print(f"  {iface}: DHCP")
+    else:
+        subnet  = net.get("SUBNET")
+        gateway = net.get("GATEWAY")
+        dns     = net.get("DNS")
+        if not all([subnet, gateway, dns]):
+            _print("  ERROR: Static IP requires SUBNET, GATEWAY, and DNS in config.md.")
+            return False
+        run(["networksetup", "-setmanual", iface, ip, subnet, gateway], sudo=True)
+        run(["networksetup", "-setdnsservers", iface, dns], sudo=True)
+        _print(f"  {iface}: static {ip}/{subnet} gw {gateway} dns {dns}")
+    return True
+
+
+def step_network(net, ip):
     _print("\n════════════════════════════════════════")
-    _print("  [network] Configuring static IP")
+    _print("  [network] Configuring network")
     _print("════════════════════════════════════════")
     ok = True
     try:
-        # Find active Ethernet interface
-        result = run(["networksetup", "-listallhardwareports"], capture=True)
-        iface = None
-        lines = result.stdout.splitlines()
-        for idx, line in enumerate(lines):
-            if "Ethernet" in line or "USB 10/100" in line or "Thunderbolt" in line:
-                for sub in lines[idx:idx+5]:
-                    m = re.search(r"Device:\s+(\S+)", sub)
-                    if m:
-                        iface = m.group(1)
-                        break
-                if iface:
-                    break
-        if not iface:
-            _print("  WARNING: Could not auto-detect Ethernet interface — trying en0")
-            iface = "en0"
-        _print(f"  Interface: {iface}")
+        eth, wifi = _detect_interfaces()
+        _print(f"  Detected — ethernet: {eth or 'none'}, wifi: {wifi or 'none'}")
 
-        subnet = net["SUBNET"]
-        gateway = net["GATEWAY"]
-        dns = net["DNS"]
-
-        run(["networksetup", "-setmanual", iface, ip, subnet, gateway], sudo=True)
-        run(["networksetup", "-setdnsservers", iface, dns], sudo=True)
-        _print(f"  Static IP {ip}/{subnet} gw {gateway} dns {dns} set on {iface}")
-
-        if disable_wifi:
-            _print("  Disabling WiFi...")
-            # Find WiFi interface
-            result2 = run(["networksetup", "-listallhardwareports"], capture=True)
-            wifi_iface = None
-            lines2 = result2.stdout.splitlines()
-            for idx2, line2 in enumerate(lines2):
-                if "Wi-Fi" in line2 or "AirPort" in line2:
-                    for sub2 in lines2[idx2:idx2+5]:
-                        m2 = re.search(r"Device:\s+(\S+)", sub2)
-                        if m2:
-                            wifi_iface = m2.group(1)
-                            break
-                    if wifi_iface:
-                        break
-            if wifi_iface:
-                run(["networksetup", "-setairportpower", wifi_iface, "off"], sudo=True)
-                _print(f"  WiFi ({wifi_iface}) disabled")
-            else:
-                _print("  WARNING: Could not find WiFi interface to disable")
+        if eth:
+            _print(f"  Using Ethernet ({eth})")
+            ok = _configure_iface(eth, ip, net)
+            if not ok and wifi:
+                _print(f"  WARNING: Ethernet config failed — falling back to WiFi ({wifi})")
+                ok = _configure_iface(wifi, ip, net)
+            elif ok and wifi:
+                run(["networksetup", "-setairportpower", wifi, "off"], sudo=True)
+                _print(f"  WiFi ({wifi}) disabled")
+        elif wifi:
+            _print(f"  No Ethernet found — using WiFi ({wifi})")
+            ok = _configure_iface(wifi, ip, net)
+        else:
+            _print("  ERROR: No Ethernet or WiFi interface detected.")
+            ok = False
 
     except Exception as e:
         _print(f"  ERROR: {e}")
@@ -257,7 +255,7 @@ def step_hosts(hosts_entries):
 
 def step_install_repo(repo_url, repo_dir):
     _print("\n════════════════════════════════════════")
-    _print("  [repo] Cloning/updating adsb_actions2")
+    _print("  [repo] Cloning/updating adsb_actions")
     _print("════════════════════════════════════════")
     ok = True
     try:
@@ -287,8 +285,8 @@ def step_pip_install(repo_dir):
     try:
         repo_dir = os.path.expanduser(repo_dir)
         # Install package with gui extras (includes kivy[base] + kivymd)
-        run(["pip3", "install", "kivy[base]"])
-        run(["pip3", "install", f"{repo_dir}[gui]"])
+        run([sys.executable, "-m", "pip", "install", "kivy[base]"])
+        run([sys.executable, "-m", "pip", "install", f"{repo_dir}[gui]"])
         _print("  Dependencies installed")
     except Exception as e:
         _print(f"  ERROR: {e}")
@@ -355,8 +353,9 @@ def step_safari_bookmarks(bookmarks):
 
         bar["Children"] = bar_children
 
-        # Kill Safari if running so the write isn't overwritten on quit
-        run(["killall", "Safari"], check=False)
+        # Kill Safari and sync agents so our write isn't overwritten on quit
+        for proc in ("Safari", "SafariBookmarksSyncAgent", "SafariCloudHistoryPushAgent"):
+            run(["killall", proc], check=False)
 
         with open(bookmarks_path, "wb") as f:
             plistlib.dump(plist, f, fmt=plistlib.FMT_XML)
@@ -377,12 +376,6 @@ def main():
 
     parser = argparse.ArgumentParser(description="88NV ATC Mac Mini Setup")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
-    parser.add_argument("--ip", help="Override static IP (normally derived from Hosts table by hostname)")
-    parser.add_argument("--subnet")
-    parser.add_argument("--gateway")
-    parser.add_argument("--dns")
-    parser.add_argument("--hostname")
-    parser.add_argument("--disable-wifi", action="store_true")
     parser.add_argument("--skip-install", action="store_true",
                         help="Skip repo clone and pip install; apply network/hostname/hosts only")
     parser.add_argument("--dry-run", action="store_true",
@@ -405,38 +398,39 @@ def main():
     _print(f"Reading config from: {args.config}")
     config = parse_config(args.config)
 
-    net = config.get("Network", {})
+    net = config.get("Network")
+    if not net:
+        _print("ERROR: Network section not found in config.md.")
+        sys.exit(1)
     repo_cfg = config.get("Repo", {})
     hosts_section = config.get("Hosts", {})
     bookmarks_section = config.get("Bookmarks", {})
 
-    # CLI overrides
-    if args.subnet:    net["SUBNET"] = args.subnet
-    if args.gateway:   net["GATEWAY"] = args.gateway
-    if args.dns:       net["DNS"] = args.dns
-    if args.hostname:  net["HOSTNAME"] = args.hostname
-
-    disable_wifi = args.disable_wifi or net.get("DISABLE_WIFI", "false").lower() == "true"
-
-    hostname = net.get("HOSTNAME", "atc-mac")
-    repo_url = repo_cfg.get("REPO_URL", "https://github.com/eastham/adsb_actions2")
-    repo_dir = repo_cfg.get("REPO_DIR", "~/git2/adsb_actions2")
-
-    # Parse hosts table: dict keys are IPs, values are hostnames
-    hosts_entries = [(ip, hostname_val) for ip, hostname_val in hosts_section.items()]
-
-    # Derive this machine's static IP from the Hosts table by matching HOSTNAME
-    static_ip = args.ip  # CLI override takes precedence
-    if not static_ip:
-        for ip, hostname_val in hosts_entries:
-            if hostname_val == hostname:
-                static_ip = ip
-                break
-    if not static_ip:
-        _print(f"ERROR: HOSTNAME '{hostname}' not found in Hosts table and --ip not provided.")
-        _print("       Add this machine to the Hosts section of config.md or pass --ip.")
+    hostname = net.get("HOSTNAME")
+    if not hostname or hostname == "FILL_ME_IN":
+        _print("ERROR: HOSTNAME not set in config.md Network table.")
         sys.exit(1)
-    _print(f"Resolved static IP for '{hostname}': {static_ip}")
+
+    ip = net.get("IP")
+    if not ip or ip == "FILL_ME_IN":
+        _print("ERROR: IP not set in config.md Network table (use a static IP or 'dhcp').")
+        sys.exit(1)
+    _print(f"Host: {hostname} / {ip}")
+
+    repo_url = repo_cfg.get("REPO_URL")
+    repo_dir = repo_cfg.get("REPO_DIR")
+    if not args.skip_install and (not repo_url or not repo_dir):
+        _print("ERROR: REPO_URL and REPO_DIR must be set in config.md Repo table.")
+        sys.exit(1)
+
+    hosts_entries = [(h_ip, hostname_val) for h_ip, hostname_val in hosts_section.items()]
+    hosts_ip = next((h_ip for h_ip, h in hosts_entries if h == hostname), None)
+    if hosts_ip is None:
+        _print(f"ERROR: '{hostname}' not found in Hosts table in config.md.")
+        sys.exit(1)
+    if ip.lower() != "dhcp" and hosts_ip != ip:
+        _print(f"ERROR: IP mismatch — Network table has {ip} but Hosts table has {hosts_ip} for '{hostname}'.")
+        sys.exit(1)
 
     # Parse bookmarks table: dict keys are URLs, values are labels
     bookmarks = [(url, label) for url, label in bookmarks_section.items()]
@@ -444,7 +438,7 @@ def main():
     results = {}
 
     # ── Network ──
-    results["network"] = step_network(net, static_ip, disable_wifi)
+    results["network"] = step_network(net, ip)
 
     # ── Hostname ──
     results["hostname"] = step_hostname(hostname)

@@ -7,11 +7,15 @@
 #
 # Usage:
 #   curl -O https://raw.githubusercontent.com/eastham/88nv_mac_config/main/bootstrap.sh
+# easier-to-type location:
+#   curl -O https://airbornehotspots.org/bootstrap.sh
+#
+# Then:
 #   bash bootstrap.sh
 #
 # After this completes:
-#   1. Edit ~/git2/88nv_mac_config/config.md with this machine's IP/hostname
-#   2. python3 ~/git2/88nv_mac_config/setup.py
+#   1. Edit ~/git-mac/88nv_mac_config/config.md with this machine' hostname
+#   2. python3 ~/git-mac/88nv_mac_config/setup.py
 
 REPO_URL="https://github.com/eastham/88nv_mac_config"
 CLONE_DIR="$HOME/git-mac/88nv_mac_config"
@@ -63,7 +67,7 @@ echo "=== [clone] Repo ready at $CLONE_DIR"
 # -------------------------------------------------------
 echo ""
 echo "=== [pip] Installing markdown-it-py ==="
-pip3 install markdown-it-py
+python3 -m pip install --user --break-system-packages markdown-it-py
 echo "=== [pip] markdown-it-py installed"
 
 # -------------------------------------------------------

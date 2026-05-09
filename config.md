@@ -1,23 +1,27 @@
 # 88NV ATC Mac Mini Configuration
 
-Edit this file before running `setup.py`. Each machine gets its own static IP
-and hostname — update the Network section for each machine. The Hosts, Bookmarks,
-and Repo sections are typically the same across all machines.
+Edit this file before running `setup.py`. Each machine gets its own hostname
+and optionally a static IP — update the Network section for each machine.
+The Hosts, Bookmarks, and Repo sections are typically the same across all machines.
 
-CLI arguments to `setup.py` override values in this file, so you can also pass
-`--ip`, `--hostname`, etc. directly without editing here.
+**Network interface selection:** setup.py prefers Ethernet if present, otherwise
+falls back to WiFi (which must already be associated before running setup.py).
 
 ---
 
-## Network
+## Network -- replace FILL_ME_IN on HOSTNAME and IP (see below)
 
 | Key          | Value         |
 |--------------|---------------|
+| HOSTNAME     | FILL_ME_IN    |
+| IP           | FILL_ME_IN    |
 | SUBNET       | 255.255.252.0 |
 | GATEWAY      | 10.4.0.1      |
 | DNS          | 10.4.0.1      |
-| HOSTNAME     | atc-mac1      |
-| DISABLE_WIFI | false         |
+
+`IP`: Set to a static IP address (e.g. `10.4.0.22`) for critical machines that
+need a fixed address. Set to `dhcp` for machines that can use dynamic addressing.
+If static, SUBNET, GATEWAY, and DNS must also be set.
 
 ---
 
