@@ -9,11 +9,13 @@ Usage:
 Options:
     --config PATH         Path to config.md (default: same dir as this script)
     --skip-install        Skip software install steps (network/hostname only)
+    --no-vnc              Skip enabling macOS Screen Sharing (VNC)
     --dry-run             Print commands without executing them
 """
 
 import argparse
 import datetime
+import getpass
 import os
 import re
 import subprocess
@@ -295,6 +297,28 @@ def step_pip_install(repo_dir):
     return ok
 
 
+def step_vnc(password):
+    _print("\n════════════════════════════════════════")
+    _print("  [vnc] Enabling macOS Screen Sharing (VNC)")
+    _print("════════════════════════════════════════")
+    ok = True
+    try:
+        kickstart = (
+            "/System/Library/CoreServices/RemoteManagement/"
+            "ARDAgent.app/Contents/Resources/kickstart"
+        )
+        run([kickstart, "-activate", "-configure", "-access", "-on",
+             "-clientopts", "-setvnclegacy", "-vnclegacy", "yes",
+             "-clientopts", "-setvncpw", "-vncpw", password,
+             "-restart", "-agent", "-privs", "-all"], sudo=True, check=False)
+        _print("  Screen Sharing enabled on port 5900")
+    except Exception as e:
+        _print(f"  ERROR: {e}")
+        ok = False
+    step_banner("vnc", ok)
+    return ok
+
+
 def step_safari_bookmarks(bookmarks):
     _print("\n════════════════════════════════════════")
     _print("  [bookmarks] Setting Safari bookmarks")
@@ -380,6 +404,8 @@ def main():
                         help="Skip repo clone and pip install; apply network/hostname/hosts only")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print commands without executing them")
+    parser.add_argument("--no-vnc", action="store_true",
+                        help="Skip enabling macOS Screen Sharing (VNC)")
     args = parser.parse_args()
     dry_run = args.dry_run
 
@@ -435,6 +461,21 @@ def main():
     # Parse bookmarks table: dict keys are URLs, values are labels
     bookmarks = [(url, label) for url, label in bookmarks_section.items()]
 
+    # Prompt for VNC password upfront
+    vnc_password = None
+    if not args.no_vnc and not dry_run:
+        while True:
+            pw1 = getpass.getpass("Set VNC password (for Screen Sharing, or Enter to skip): ")
+            if not pw1:
+                _print("  Skipping VNC setup (no password entered).")
+                args.no_vnc = True
+                break
+            pw2 = getpass.getpass("Confirm VNC password: ")
+            if pw1 == pw2:
+                vnc_password = pw1
+                break
+            print("Passwords do not match — try again.")
+
     results = {}
 
     # ── Network ──
@@ -452,6 +493,10 @@ def main():
 
         # ── pip install ──
         results["pip"] = step_pip_install(repo_dir)
+
+    # ── VNC / Screen Sharing ──
+    if not args.no_vnc:
+        results["vnc"] = step_vnc(vnc_password or "")
 
     # ── Safari bookmarks ──
     results["bookmarks"] = step_safari_bookmarks(bookmarks)
