@@ -11,6 +11,7 @@ Options:
     --skip-install        Skip software install steps (network/hostname only)
     --no-vnc              Skip enabling macOS Screen Sharing (VNC)
     --dry-run             Print commands without executing them
+    --emit-etchosts       Print the /etc/hosts content that would be written, then exit
 """
 
 import argparse
@@ -212,31 +213,35 @@ def step_hostname(hostname):
     return ok
 
 
+def build_hosts_block(hosts_entries):
+    """Return the /etc/hosts content with the 88NV block appended (old block replaced)."""
+    marker_start = "# 88NV BEGIN"
+    marker_end = "# 88NV END"
+
+    with open("/etc/hosts") as f:
+        existing = f.read()
+
+    existing = re.sub(
+        rf"{re.escape(marker_start)}.*?{re.escape(marker_end)}\n?",
+        "", existing, flags=re.DOTALL
+    )
+
+    block_lines = [marker_start]
+    for ip, hostname in hosts_entries:
+        block_lines.append(f"{ip:<16} {hostname}")
+    block_lines.append(marker_end)
+    block = "\n".join(block_lines) + "\n"
+
+    return existing.rstrip("\n") + "\n\n" + block
+
+
 def step_hosts(hosts_entries):
     _print("\n════════════════════════════════════════")
     _print("  [hosts] Writing /etc/hosts entries")
     _print("════════════════════════════════════════")
     ok = True
     try:
-        marker_start = "# 88NV ATC BEGIN"
-        marker_end = "# 88NV ATC END"
-
-        with open("/etc/hosts") as f:
-            existing = f.read()
-
-        # Strip old 88NV block if present
-        existing = re.sub(
-            rf"{re.escape(marker_start)}.*?{re.escape(marker_end)}\n?",
-            "", existing, flags=re.DOTALL
-        )
-
-        block_lines = [marker_start]
-        for ip, hostname in hosts_entries:
-            block_lines.append(f"{ip:<16} {hostname}")
-        block_lines.append(marker_end)
-        block = "\n".join(block_lines) + "\n"
-
-        new_content = existing.rstrip("\n") + "\n\n" + block
+        new_content = build_hosts_block(hosts_entries)
 
         # Write via temp file + sudo mv
         with tempfile.NamedTemporaryFile("w", suffix=".hosts", delete=False) as tmp:
@@ -406,14 +411,23 @@ def main():
                         help="Print commands without executing them")
     parser.add_argument("--no-vnc", action="store_true",
                         help="Skip enabling macOS Screen Sharing (VNC)")
+    parser.add_argument("--emit-etchosts", action="store_true",
+                        help="Print the /etc/hosts content that would be written, then exit")
     args = parser.parse_args()
     dry_run = args.dry_run
+
+    if args.emit_etchosts:
+        config = parse_config(args.config)
+        hosts_section = config.get("Hosts", {})
+        hosts_entries = list(hosts_section.items())
+        print(build_hosts_block(hosts_entries), end="")
+        return 0
 
     open_log()
 
     _print("")
     _print("════════════════════════════════════════════════════")
-    _print("  88NV ATC Mac Mini Setup")
+    _print("  88N Mac Mini Setup")
     _print(f"  {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     _print("════════════════════════════════════════════════════")
     if dry_run:
