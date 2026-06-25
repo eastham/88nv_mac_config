@@ -30,7 +30,6 @@ If static, SUBNET, GATEWAY, and DNS must also be set.
 These entries are written to `/etc/hosts` on each machine, enabling local
 hostname resolution even when upstream DNS is unavailable.
 
-To get plaintext /etc/hosts, use setup.py --emit-etchosts
 
 | IP        | Hostname  |
 |-----------|-----------|
@@ -41,6 +40,18 @@ To get plaintext /etc/hosts, use setup.py --emit-etchosts
 | 10.4.0.21 | scenictent |
 | 10.4.0.22 | obsdeck  |
 | 10.4.0.23 | webcam  |
+
+To get plaintext /etc/hosts, use setup.py --emit-etchosts, or use this (may be out of date)
+
+```
+10.4.0.1        gateway
+10.4.0.10       boxone
+10.4.0.11       boxtwo
+10.4.0.20       monitor
+10.4.0.21       scenictent
+10.4.0.22       obsdeck
+10.4.0.23       webcam
+```
 
 ---
 
@@ -53,6 +64,15 @@ To get plaintext /etc/hosts, use setup.py --emit-etchosts
 
 ---
 
+## Autostart -- apps to launch at login. Replace FILL_ME_IN in LAUNCH_ARGS.
+
+| Key                    | Value                                                                  |
+|------------------------|------------------------------------------------------------------------|
+| OPEN_CHROME_BOOKMARK_1 | ADS-B map                                                              |
+| OPEN_CHROME_BOOKMARK_2 | PTS                                                                    |
+| LAUNCH_SCRIPT          | src/controller.py                                                      |
+| LAUNCH_ARGS            | -- --rules ui.yaml --ipaddr boxone --port 30006 tests/regions.kml |
+| STARTUP_DELAY          | 10                                                                     |
 
 ---
 

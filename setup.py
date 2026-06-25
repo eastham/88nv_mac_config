@@ -22,8 +22,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import textwrap
-
 try:
     from markdown_it import MarkdownIt
 except ImportError:
@@ -111,16 +109,6 @@ def run(cmd, *, check=True, capture=False, sudo=False):
         kwargs["stdout"] = sys.stdout
         kwargs["stderr"] = sys.stderr
     return subprocess.run(cmd, **kwargs)
-
-def run_shell(cmd_str, *, check=True, sudo=False):
-    """Run a shell string (allows pipes/redirects)."""
-    _print(f"  + {cmd_str}")
-    if dry_run:
-        return 0
-    if sudo and os.geteuid() != 0:
-        cmd_str = "sudo " + cmd_str
-    return subprocess.run(cmd_str, shell=True, check=check,
-                          stdout=sys.stdout, stderr=sys.stderr).returncode
 
 # ── steps ─────────────────────────────────────────────────────────────────────
 
@@ -243,17 +231,19 @@ def step_hosts(hosts_entries):
     ok = True
     try:
         new_content = build_hosts_block(hosts_entries)
-
-        # Write via temp file + sudo mv
-        with tempfile.NamedTemporaryFile("w", suffix=".hosts", delete=False) as tmp:
-            tmp.write(new_content)
-            tmp_path = tmp.name
-
-        run(["cp", tmp_path, "/etc/hosts"], sudo=True)
-        os.unlink(tmp_path)
-        _print(f"  Added {len(hosts_entries)} entries to /etc/hosts")
+        _print(f"  Writing {len(hosts_entries)} entries to /etc/hosts")
         for ip, hostname in hosts_entries:
             _print(f"    {ip}  {hostname}")
+
+        if not dry_run:
+            with tempfile.NamedTemporaryFile("w", suffix=".hosts", delete=False) as tmp:
+                tmp.write(new_content)
+                tmp_path = tmp.name
+            run(["cp", tmp_path, "/etc/hosts"], sudo=True)
+            os.unlink(tmp_path)
+            _print("  /etc/hosts updated")
+        else:
+            _print("  [dry-run] Would write the above entries to /etc/hosts")
     except Exception as e:
         _print(f"  ERROR: {e}")
         ok = False
@@ -365,8 +355,8 @@ def step_safari_bookmarks(bookmarks):
 
         bar_children = bar.get("Children", [])
 
-        # Remove existing 88NV entries (by URL match)
-        existing_urls = {b[1] for b in bookmarks}
+        # Remove existing 88NV entries (by URL match) so re-runs don't duplicate
+        existing_urls = {b[0] for b in bookmarks}
         bar_children = [c for c in bar_children
                         if c.get("URLString") not in existing_urls]
 
@@ -383,19 +373,151 @@ def step_safari_bookmarks(bookmarks):
 
         bar["Children"] = bar_children
 
-        # Kill Safari and sync agents so our write isn't overwritten on quit
-        for proc in ("Safari", "SafariBookmarksSyncAgent", "SafariCloudHistoryPushAgent"):
-            run(["killall", proc], check=False)
+        if not dry_run:
+            # Kill Safari and sync agents BEFORE writing so they can't overwrite our file on quit
+            for proc in ("Safari", "SafariBookmarksSyncAgent", "SafariCloudHistoryPushAgent"):
+                run(["killall", proc], check=False)
 
-        with open(bookmarks_path, "wb") as f:
-            plistlib.dump(plist, f, fmt=plistlib.FMT_XML)
+            with open(bookmarks_path, "wb") as f:
+                plistlib.dump(plist, f, fmt=plistlib.FMT_XML)
+            _print(f"  {len(bookmarks)} bookmarks written to Safari BookmarksBar")
+        else:
+            _print(f"  [dry-run] Would write {len(bookmarks)} bookmarks to Safari BookmarksBar (Safari not killed)")
 
-        _print(f"  {len(bookmarks)} bookmarks written to Safari BookmarksBar")
         _print("  NOTE: Launch Safari to verify bookmark bar is visible (View → Show Favorites Bar)")
     except Exception as e:
         _print(f"  ERROR: {e}")
         ok = False
     step_banner("bookmarks", ok)
+    return ok
+
+
+def step_autostart(autostart_cfg, bookmarks_section, repo_dir):
+    _print("\n════════════════════════════════════════")
+    _print("  [autostart] Configuring login autostart")
+    _print("════════════════════════════════════════")
+    ok = True
+    try:
+        # Resolve Chrome URLs by matching bookmark labels
+        # bookmarks_section is {URL: label}; invert to look up by label
+        label_to_url = {label: url for url, label in bookmarks_section.items()}
+        chrome_urls = []
+        for key in sorted(k for k in autostart_cfg if k.startswith("OPEN_CHROME_BOOKMARK_")):
+            label = autostart_cfg[key]
+            url = label_to_url.get(label)
+            if url:
+                chrome_urls.append(url)
+                _print(f"  Chrome: {label} -> {url}")
+            else:
+                _print(f"  WARNING: Bookmark label '{label}' not found in Bookmarks section — skipping")
+
+        launch_script_rel = autostart_cfg.get("LAUNCH_SCRIPT", "")
+        launch_args       = autostart_cfg.get("LAUNCH_ARGS", "")
+        startup_delay     = autostart_cfg.get("STARTUP_DELAY", "10")
+
+        launch_script = ""
+        if launch_script_rel:
+            launch_script = os.path.join(os.path.expanduser(repo_dir), launch_script_rel)
+            if not dry_run and not os.path.exists(launch_script):
+                _print(f"  WARNING: LAUNCH_SCRIPT does not exist: {launch_script}")
+                _print("  The repo may not have been cloned yet, or the path is wrong.")
+            _print(f"  Launch script: {launch_script}")
+            _print(f"  Launch args: {launch_args}")
+            _print(f"  Python interpreter: {sys.executable}")
+
+        home        = os.path.expanduser("~")
+        script_dir  = os.path.join(home, "Library", "88nv")
+        script_path = os.path.join(script_dir, "autostart.sh")
+        plist_dir   = os.path.join(home, "Library", "LaunchAgents")
+        plist_path  = os.path.join(plist_dir, "com.88nv.autostart.plist")
+        log_path    = os.path.join(home, "Library", "Logs", "88nv_autostart.log")
+
+        if not dry_run:
+            os.makedirs(script_dir, exist_ok=True)
+            os.makedirs(plist_dir, exist_ok=True)
+
+        # ── Build launcher shell script ───────────────────────────────────────
+        lines = [
+            "#!/bin/bash",
+            f"# 88NV autostart launcher — generated by setup.py on {datetime.datetime.now():%Y-%m-%d}",
+            f'LOG="{log_path}"',
+            'exec >> "$LOG" 2>&1',
+            'echo "=== $(date) 88NV autostart ==="',
+            f"sleep {startup_delay}",
+        ]
+
+        if chrome_urls:
+            lines += [
+                "",
+                "# Chrome windows — pgrep guard prevents duplicate windows on app-crash restart",
+                'pgrep -x "Google Chrome" > /dev/null || {',
+            ]
+            for i, url in enumerate(chrome_urls):
+                lines.append(f'    open -na "Google Chrome" --args --new-window "{url}"')
+                if i < len(chrome_urls) - 1:
+                    lines.append("    sleep 1")
+            lines += ["    sleep 2", "}"]
+
+        if launch_script:
+            script_dir_path = os.path.dirname(launch_script)
+            script_basename = os.path.basename(launch_script)
+            lines += [
+                "",
+                f"# App launcher (python: {sys.executable})",
+                f'cd "{script_dir_path}"',
+                f'exec "{sys.executable}" "{script_basename}" {launch_args}',
+            ]
+
+        script_content = "\n".join(lines) + "\n"
+
+        if not dry_run:
+            with open(script_path, "w") as f:
+                f.write(script_content)
+            os.chmod(script_path, 0o755)
+            _print(f"  Wrote launcher: {script_path}")
+        else:
+            _print(f"  [dry-run] Would write launcher: {script_path}")
+            for line in lines:
+                _print(f"    {line}")
+
+        # ── Build and write plist ─────────────────────────────────────────────
+        import plistlib as _plistlib
+        plist_data = {
+            "Label": "com.88nv.autostart",
+            "ProgramArguments": ["/bin/bash", script_path],
+            "RunAtLoad": True,
+            "KeepAlive": {"SuccessfulExit": False},
+            "StandardOutPath": log_path,
+            "StandardErrorPath": log_path,
+            "ProcessType": "Interactive",
+        }
+
+        if not dry_run:
+            with open(plist_path, "wb") as f:
+                _plistlib.dump(plist_data, f, fmt=_plistlib.FMT_XML)
+            _print(f"  Wrote plist: {plist_path}")
+        else:
+            _print(f"  [dry-run] Would write plist: {plist_path}")
+
+        # ── Load the LaunchAgent ──────────────────────────────────────────────
+        if not dry_run:
+            uid = str(os.getuid())
+            run(["launchctl", "bootout", f"gui/{uid}/com.88nv.autostart"], check=False)
+            run(["launchctl", "bootstrap", f"gui/{uid}", plist_path])
+
+            result = run(["launchctl", "list", "com.88nv.autostart"], capture=True, check=False)
+            if result.returncode == 0 and "com.88nv.autostart" in result.stdout:
+                _print("  LaunchAgent loaded and verified — will run at next login")
+            else:
+                _print("  WARNING: LaunchAgent may not have loaded correctly — check launchctl list com.88nv.autostart")
+                ok = False
+        else:
+            _print(f"  [dry-run] Would run: launchctl bootout / bootstrap gui/{os.getuid()} {plist_path}")
+
+    except Exception as e:
+        _print(f"  ERROR: {e}")
+        ok = False
+    step_banner("autostart", ok)
     return ok
 
 
@@ -412,6 +534,8 @@ def main():
                         help="Print commands without executing them")
     parser.add_argument("--no-vnc", action="store_true",
                         help="Skip enabling macOS Screen Sharing (VNC)")
+    parser.add_argument("--no-autostart", action="store_true",
+                        help="Skip autostart configuration")
     parser.add_argument("--emit-etchosts", action="store_true",
                         help="Print the /etc/hosts content that would be written, then exit")
     args = parser.parse_args()
@@ -428,7 +552,7 @@ def main():
 
     _print("")
     _print("════════════════════════════════════════════════════")
-    _print("  88N Mac Mini Setup")
+    _print("  88NV Mac Mini Setup")
     _print(f"  {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     _print("════════════════════════════════════════════════════")
     if dry_run:
@@ -515,6 +639,11 @@ def main():
 
     # ── Safari bookmarks ──
     results["bookmarks"] = step_safari_bookmarks(bookmarks)
+
+    # ── Autostart ──
+    autostart_cfg = config.get("Autostart", {})
+    if not args.no_autostart and not args.skip_install and autostart_cfg:
+        results["autostart"] = step_autostart(autostart_cfg, bookmarks_section, repo_dir)
 
     # ── Summary ──
     _print("\n════════════════════════════════════════════════════")
