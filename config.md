@@ -9,7 +9,7 @@ falls back to WiFi (which must already be associated before running setup.py).
 
 ---
 
-## Network -- replace FILL_ME_IN on HOSTNAME and IP (see below)
+## Network -- details for THIS machine.  Replace FILL_ME_IN on HOSTNAME and IP (see below)
 
 | Key          | Value         |
 |--------------|---------------|
@@ -25,19 +25,12 @@ If static, SUBNET, GATEWAY, and DNS must also be set.
 
 ---
 
-## Repo
-
-| Key      | Value                                    |
-|----------|------------------------------------------|
-| REPO_URL | https://github.com/eastham/adsb_actions |
-| REPO_DIR | ~/git-mac/adsb_actions                     |
-
----
-
 ## Hosts
 
 These entries are written to `/etc/hosts` on each machine, enabling local
 hostname resolution even when upstream DNS is unavailable.
+
+To get plaintext /etc/hosts, use setup.py --emit-etchosts
 
 | IP        | Hostname  |
 |-----------|-----------|
@@ -47,6 +40,19 @@ hostname resolution even when upstream DNS is unavailable.
 | 10.4.0.20 | monitor   |
 | 10.4.0.21 | scenictent |
 | 10.4.0.22 | obsdeck  |
+| 10.4.0.23 | webcam  |
+
+---
+
+## Repo
+
+| Key      | Value                                    |
+|----------|------------------------------------------|
+| REPO_URL | https://github.com/eastham/adsb_actions |
+| REPO_DIR | ~/git-mac/adsb_actions                     |
+
+---
+
 
 ---
 

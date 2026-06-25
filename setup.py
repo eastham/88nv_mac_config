@@ -58,7 +58,8 @@ def step_banner(label, ok):
 # ── config parsing ────────────────────────────────────────────────────────────
 
 def parse_config(path):
-    """Parse config.md. Returns dict of dicts, keyed by section heading."""
+    """Parse config.md. Returns dict of dicts, keyed by the first word of each
+    section heading."""
     with open(path) as f:
         text = f.read()
 
