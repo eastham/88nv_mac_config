@@ -251,7 +251,7 @@ def step_hosts(hosts_entries):
     return ok
 
 
-def step_install_repo(repo_url, repo_dir):
+def step_install_repo(repo_url, repo_dir, repo_branch=None):
     _print("\n════════════════════════════════════════")
     _print("  [repo] Cloning/updating adsb_actions")
     _print("════════════════════════════════════════")
@@ -262,11 +262,17 @@ def step_install_repo(repo_url, repo_dir):
         os.makedirs(parent, exist_ok=True)
 
         if os.path.isdir(os.path.join(repo_dir, ".git")):
-            _print(f"  Repo exists at {repo_dir} — pulling...")
+            _print(f"  Repo exists at {repo_dir} — fetching...")
+            run(["git", "-C", repo_dir, "fetch", "--all"])
+            if repo_branch:
+                _print(f"  Checking out branch {repo_branch}...")
+                run(["git", "-C", repo_dir, "checkout", repo_branch])
             run(["git", "-C", repo_dir, "pull"])
         else:
-            _print(f"  Cloning {repo_url} -> {repo_dir}...")
-            run(["git", "clone", repo_url, repo_dir])
+            branch_args = ["--branch", repo_branch] if repo_branch else []
+            branch_note = f" (branch {repo_branch})" if repo_branch else ""
+            _print(f"  Cloning {repo_url}{branch_note} -> {repo_dir}...")
+            run(["git", "clone"] + branch_args + [repo_url, repo_dir])
         _print(f"  Repo ready at {repo_dir}")
     except Exception as e:
         _print(f"  ERROR: {e}")
@@ -584,6 +590,7 @@ def main():
 
     repo_url = repo_cfg.get("REPO_URL")
     repo_dir = repo_cfg.get("REPO_DIR")
+    repo_branch = repo_cfg.get("REPO_BRANCH") or None
     if not args.skip_install and (not repo_url or not repo_dir):
         _print("ERROR: REPO_URL and REPO_DIR must be set in config.md Repo table.")
         sys.exit(1)
@@ -628,7 +635,7 @@ def main():
 
     if not args.skip_install:
         # ── Clone repo ──
-        results["repo"] = step_install_repo(repo_url, repo_dir)
+        results["repo"] = step_install_repo(repo_url, repo_dir, repo_branch)
 
         # ── pip install ──
         results["pip"] = step_pip_install(repo_dir)

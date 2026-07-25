@@ -57,10 +57,14 @@ To get plaintext /etc/hosts, use setup.py --emit-etchosts, or use this (may be o
 
 ## Repo
 
-| Key      | Value                                    |
-|----------|------------------------------------------|
-| REPO_URL | https://github.com/eastham/adsb_actions |
-| REPO_DIR | ~/git-mac/adsb_actions                     |
+| Key         | Value                                    |
+|-------------|------------------------------------------|
+| REPO_URL    | https://github.com/eastham/adsb_actions |
+| REPO_DIR    | ~/git-mac/adsb_actions                     |
+| REPO_BRANCH | 2026-wip                                   |
+
+`REPO_BRANCH`: branch to check out after cloning/updating. Leave blank or omit
+to use the repo's default branch.
 
 ---
 
