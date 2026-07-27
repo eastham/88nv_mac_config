@@ -68,7 +68,7 @@ to use the repo's default branch.
 
 ---
 
-## Autostart -- apps to launch at login. Replace FILL_ME_IN in LAUNCH_ARGS.
+## Autostart -- apps to launch at login.
 
 | Key                    | Value                                                                  |
 |------------------------|------------------------------------------------------------------------|
