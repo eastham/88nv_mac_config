@@ -16,8 +16,8 @@ falls back to WiFi (which must already be associated before running setup.py).
 | HOSTNAME     | FILL_ME_IN    |
 | IP           | FILL_ME_IN    |
 | SUBNET       | 255.255.252.0 |
-| GATEWAY      | 10.4.0.1      |
-| DNS          | 10.4.0.1      |
+| GATEWAY      | 192.168.128.1 |
+| DNS          | 1.1.1.1       |
 
 `IP`: Set to a static IP address (e.g. `10.4.0.22`) for critical machines that
 need a fixed address. Set to `dhcp` for machines that can use dynamic addressing.
@@ -31,26 +31,31 @@ These entries are written to `/etc/hosts` on each machine, enabling local
 hostname resolution even when upstream DNS is unavailable.
 
 
-| IP        | Hostname  |
-|-----------|-----------|
-| 10.4.0.1  | gateway   |
-| 10.4.0.10 | boxone    |
-| 10.4.0.11 | boxtwo    |
-| 10.4.0.20 | monitor   |
-| 10.4.0.21 | scenictent |
-| 10.4.0.22 | obsdeck  |
-| 10.4.0.23 | webcam  |
+
+| IP            | Hostname   | MAC               |
+|---------------|------------|-------------------|
+| 192.168.128.1 | gateway    |                   |
+| 192.168.128.2 | boxone     | 2c:cf:67:03:2e:51 |
+| 192.168.128.3 | monitor    | 2c:cf:67:21:eb:bd |
+| 192.168.128.4 | boxtwo     | e4:5f:01:96:f8:5c |
+| 192.168.128.5 | scenictent |                   |
+| 192.168.128.6 | obsdeck    |                   |
+| 192.168.128.7 | webcam     |                   |
+| 192.168.128.8 | tower-mac  |                   |
+| 192.168.128.9 | ground-mac |                   |
 
 To get plaintext /etc/hosts, use setup.py --emit-etchosts, or use this (may be out of date)
 
 ```
-10.4.0.1        gateway
-10.4.0.10       boxone
-10.4.0.11       boxtwo
-10.4.0.20       monitor
-10.4.0.21       scenictent
-10.4.0.22       obsdeck
-10.4.0.23       webcam
+192.168.128.1  gateway
+192.168.128.2  boxone      # ether 2c:cf:67:03:2e:51
+192.168.128.3  monitor     # ether 2c:cf:67:21:eb:bd
+192.168.128.4  boxtwo      # ether e4:5f:01:96:f8:5c
+192.168.128.5  scenictent
+192.168.128.6  obsdeck
+192.168.128.7  webcam
+192.168.128.8  tower-mac
+192.168.128.9  ground-mac
 ```
 
 ---
