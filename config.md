@@ -81,7 +81,7 @@ to use the repo's default branch.
 | OPEN_CHROME_BOOKMARK_2 | PTS                                                                    |
 | OPEN_CHROME_BOOKMARK_3 | Parking grid                                                           |
 | LAUNCH_SCRIPT          | src/applications/stripview/controller.py                                                      |
-| LAUNCH_ARGS            | -- --rules examples/88nv/stripview_ui.yaml --ipaddr boxone --port 30006 --db-logic examples/88nv/brc_db_logic.py |
+| LAUNCH_ARGS            | -- --rules ../../../examples/88nv/stripview_ui.yaml --ipaddr boxone --port 30006 --db-logic examples/88nv/brc_db_logic.py |
 | STARTUP_DELAY          | 10                                                                     |
 
 ---
