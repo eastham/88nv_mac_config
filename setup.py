@@ -114,27 +114,72 @@ def run(cmd, *, check=True, capture=False, sudo=False):
 
 # ── steps ─────────────────────────────────────────────────────────────────────
 
+def _list_services():
+    """Return [(service_name, device)] from networksetup, in service order.
+
+    Only services listed here can be passed to networksetup -setmanual/-setdhcp;
+    -listallhardwareports also reports ports with no service (e.g. unconfigured
+    Thunderbolt), which networksetup rejects as "not a recognized network service".
+    """
+    result = run(["networksetup", "-listnetworkserviceorder"], capture=True)
+    services = []
+    name = None
+    for line in result.stdout.splitlines():
+        m = re.match(r"\(\d+\)\s+(.*\S)", line)
+        if m:
+            name = m.group(1)
+            continue
+        m = re.search(r"Device:\s*([^)\s]*)", line)
+        if m and name:
+            dev = m.group(1)
+            if dev:
+                services.append((name, dev))
+            name = None
+    return services
+
+
 def _detect_interfaces():
-    """Return (eth_iface, wifi_iface) from networksetup; either may be None."""
+    """Return (eth_service, wifi_service, wifi_device). Any may be None.
+
+    Classification comes from -listallhardwareports (which names the port type),
+    but the returned ethernet/wifi values are *service* names from
+    -listnetworkserviceorder, since -setmanual/-setdhcp only accept those and
+    reject BSD device names like en0. wifi_device is the BSD name, which is what
+    -setairportpower requires instead.
+    """
     if dry_run:
-        return "en0", "en1"
+        return "Ethernet", "Wi-Fi", "en0"
+
+    # device -> service name, for the devices that actually have a service
+    dev_to_service = {dev: name for name, dev in _list_services()}
+
     result = run(["networksetup", "-listallhardwareports"], capture=True)
     lines = result.stdout.splitlines()
-    eth = wifi = None
+    eth_dev = wifi_dev = None
     for idx, line in enumerate(lines):
-        if not eth and ("Ethernet" in line or "USB 10/100" in line or "Thunderbolt" in line):
-            for sub in lines[idx:idx+5]:
-                m = re.search(r"Device:\s+(\S+)", sub)
-                if m:
-                    eth = m.group(1)
-                    break
-        if not wifi and ("Wi-Fi" in line or "AirPort" in line):
-            for sub in lines[idx:idx+5]:
-                m = re.search(r"Device:\s+(\S+)", sub)
-                if m:
-                    wifi = m.group(1)
-                    break
-    return eth, wifi
+        if not line.startswith("Hardware Port:"):
+            continue
+        dev = None
+        for sub in lines[idx:idx+5]:
+            m = re.search(r"Device:\s+(\S+)", sub)
+            if m:
+                dev = m.group(1)
+                break
+        if not dev or dev not in dev_to_service:
+            # No configurable service for this port; networksetup would reject it.
+            continue
+        if dev.startswith("bridge") or "Bridge" in line:
+            # Thunderbolt Bridge matches "Thunderbolt" below but is not a NIC.
+            continue
+        if eth_dev is None and ("Ethernet" in line or "USB 10/100" in line
+                                or "Thunderbolt" in line):
+            eth_dev = dev
+        elif wifi_dev is None and ("Wi-Fi" in line or "AirPort" in line):
+            wifi_dev = dev
+
+    eth = dev_to_service.get(eth_dev) if eth_dev else None
+    wifi = dev_to_service.get(wifi_dev) if wifi_dev else None
+    return eth, wifi, wifi_dev
 
 
 def _configure_iface(iface, ip, net):
@@ -161,7 +206,7 @@ def step_network(net, ip):
     _print("════════════════════════════════════════")
     ok = True
     try:
-        eth, wifi = _detect_interfaces()
+        eth, wifi, wifi_dev = _detect_interfaces()
         _print(f"  Detected — ethernet: {eth or 'none'}, wifi: {wifi or 'none'}")
 
         if eth:
@@ -171,7 +216,7 @@ def step_network(net, ip):
                 _print(f"  WARNING: Ethernet config failed — falling back to WiFi ({wifi})")
                 ok = _configure_iface(wifi, ip, net)
             elif ok and wifi:
-                run(["networksetup", "-setairportpower", wifi, "off"], sudo=True)
+                run(["networksetup", "-setairportpower", wifi_dev, "off"], sudo=True)
                 _print(f"  WiFi ({wifi}) disabled")
         elif wifi:
             _print(f"  No Ethernet found — using WiFi ({wifi})")
