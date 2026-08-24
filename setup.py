@@ -576,6 +576,10 @@ def step_autostart(autostart_cfg, bookmarks_section, repo_dir):
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
+ALL_STEPS = ["network", "hostname", "hosts", "repo", "pip",
+             "vnc", "bookmarks", "autostart"]
+
+
 def main():
     global dry_run
 
@@ -591,7 +595,30 @@ def main():
                         help="Skip autostart configuration")
     parser.add_argument("--emit-etchosts", action="store_true",
                         help="Print the /etc/hosts content that would be written, then exit")
+    parser.add_argument("--only", metavar="STEP",
+                        help="Run only these steps (comma-separated). "
+                             "See --list-steps for names.")
+    parser.add_argument("--list-steps", action="store_true",
+                        help="List the step names accepted by --only, then exit")
     args = parser.parse_args()
+
+    if args.list_steps:
+        print("Steps (in run order):")
+        for name in ALL_STEPS:
+            print(f"  {name}")
+        return 0
+
+    only = None
+    if args.only:
+        only = [s.strip() for s in args.only.split(",") if s.strip()]
+        unknown = [s for s in only if s not in ALL_STEPS]
+        if unknown:
+            print(f"ERROR: unknown step(s): {', '.join(unknown)}", file=sys.stderr)
+            print(f"Valid steps: {', '.join(ALL_STEPS)}", file=sys.stderr)
+            return 2
+
+    def should_run(name):
+        return name in only if only else True
     dry_run = args.dry_run
 
     if args.emit_etchosts:
@@ -656,7 +683,7 @@ def main():
 
     # Prompt for VNC password upfront
     vnc_password = None
-    if not args.no_vnc and not dry_run:
+    if not args.no_vnc and not dry_run and should_run("vnc"):
         while True:
             pw1 = getpass.getpass("Set VNC password (for Screen Sharing, or Enter to skip): ")
             if not pw1:
@@ -672,31 +699,38 @@ def main():
     results = {}
 
     # ── Network ──
-    results["network"] = step_network(net, ip)
+    if should_run("network"):
+        results["network"] = step_network(net, ip)
 
     # ── Hostname ──
-    results["hostname"] = step_hostname(hostname)
+    if should_run("hostname"):
+        results["hostname"] = step_hostname(hostname)
 
     # ── /etc/hosts ──
-    results["hosts"] = step_hosts(hosts_entries)
+    if should_run("hosts"):
+        results["hosts"] = step_hosts(hosts_entries)
 
     if not args.skip_install:
         # ── Clone repo ──
-        results["repo"] = step_install_repo(repo_url, repo_dir, repo_branch)
+        if should_run("repo"):
+            results["repo"] = step_install_repo(repo_url, repo_dir, repo_branch)
 
         # ── pip install ──
-        results["pip"] = step_pip_install(repo_dir)
+        if should_run("pip"):
+            results["pip"] = step_pip_install(repo_dir)
 
     # ── VNC / Screen Sharing ──
-    if not args.no_vnc:
+    if not args.no_vnc and should_run("vnc"):
         results["vnc"] = step_vnc(vnc_password or "")
 
     # ── Safari bookmarks ──
-    results["bookmarks"] = step_safari_bookmarks(bookmarks)
+    if should_run("bookmarks"):
+        results["bookmarks"] = step_safari_bookmarks(bookmarks)
 
     # ── Autostart ──
     autostart_cfg = config.get("Autostart", {})
-    if not args.no_autostart and not args.skip_install and autostart_cfg:
+    if not args.no_autostart and not args.skip_install and autostart_cfg \
+            and should_run("autostart"):
         results["autostart"] = step_autostart(autostart_cfg, bookmarks_section, repo_dir)
 
     # ── Summary ──
@@ -714,7 +748,9 @@ def main():
     if all_ok:
         _print("All steps completed successfully.")
     else:
-        _print("Some steps FAILED — review output above and re-run failed steps.")
+        failed = [s for s, ok in results.items() if not ok]
+        _print("Some steps FAILED — review output above.")
+        _print(f"Re-run just those steps with:  --only {','.join(failed)}")
     _print(f"\nFull log saved to: {log_path}")
 
     return 0 if all_ok else 1
