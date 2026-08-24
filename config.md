@@ -80,7 +80,7 @@ to use the repo's default branch.
 | OPEN_CHROME_BOOKMARK_1 | ADS-B map                                                              |
 | OPEN_CHROME_BOOKMARK_2 | PTS                                                                    |
 | OPEN_CHROME_BOOKMARK_3 | Parking grid                                                           |
-| LAUNCH_SCRIPT          | src/controller.py                                                      |
+| LAUNCH_SCRIPT          | src/applications/stripview/controller.py                                                      |
 | LAUNCH_ARGS            | -- --rules examples/88nv/stripview_ui.yaml --ipaddr boxone --port 30006 --db-logic examples/88nv/brc_db_logic.py |
 | STARTUP_DELAY          | 10                                                                     |
 
@@ -93,7 +93,7 @@ descriptive — ATC volunteers use these to quickly reach operational resources.
 
 | URL                      | Label         |
 |--------------------------|---------------|
-| http://boxone/tar1090    | ADS-B map  |
+| http://boxone/tar1090/    | ADS-B map  |
 | https://www.appsheet.com/start/0886479f-2675-4bce-8b5e-cb3d60d7b31c   | PTS   |
 | https://docs.google.com/spreadsheets/d/1M2gbB7gZNTnKkMnklL0UPag2T1YrINz3IV1CRUA1X2o/edit?gid=0#gid=0 | Parking grid |
 | https://docs.google.com/document/d/1dOE_1WoR1acItrbT1CSZHPqc-PcSgqOkt4oUqlUPvIg/edit?tab=t.0#heading=h.jylnajbc9cbi | Crewmember Guide |

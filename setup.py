@@ -502,7 +502,7 @@ def step_autostart(autostart_cfg, bookmarks_section, repo_dir):
         if chrome_urls:
             lines += [
                 "",
-                "# Chrome windows — pgrep guard prevents duplicate windows on app-crash restart",
+                "# Chrome windows — pgrep guard skips opening if Chrome is already running",
                 'pgrep -x "Google Chrome" > /dev/null || {',
             ]
             for i, url in enumerate(chrome_urls):
@@ -539,7 +539,9 @@ def step_autostart(autostart_cfg, bookmarks_section, repo_dir):
             "Label": "com.88nv.autostart",
             "ProgramArguments": ["/bin/bash", script_path],
             "RunAtLoad": True,
-            "KeepAlive": {"SuccessfulExit": False},
+            # No KeepAlive: run once at login only. With KeepAlive, launchd
+            # relaunched the script every time the app exited, which retriggered
+            # the Chrome block (and bounced the dock) without reopening windows.
             "StandardOutPath": log_path,
             "StandardErrorPath": log_path,
             "ProcessType": "Interactive",
