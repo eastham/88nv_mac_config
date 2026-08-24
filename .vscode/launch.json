@@ -1,0 +1,38 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "setup.py --dry-run",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/setup.py",
+            "args": ["--dry-run"],
+            "python": "/usr/bin/python3",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "setup.py --emit-etchosts",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/setup.py",
+            "args": ["--emit-etchosts"],
+            "python": "/usr/bin/python3",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "setup.py --dry-run --skip-install",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/setup.py",
+            "args": ["--dry-run", "--skip-install"],
+            "python": "/usr/bin/python3",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
+    ]
+}

@@ -76,7 +76,9 @@ def parse_config(path):
             first_data_row = True
             for line in tok.content.splitlines():
                 cells = [c.strip() for c in line.strip().strip("|").split("|")]
-                if len(cells) != 2 or not cells[0]:
+                # Tables may have extra trailing columns (e.g. Hosts has a MAC
+                # column); only the first two are used as key/value.
+                if len(cells) < 2 or not cells[0]:
                     continue
                 if re.match(r'^[-:| ]+$', cells[0]):  # separator row
                     continue
