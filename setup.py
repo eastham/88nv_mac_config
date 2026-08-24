@@ -466,16 +466,35 @@ def step_autostart(autostart_cfg, bookmarks_section, repo_dir):
 
         launch_script_rel = autostart_cfg.get("LAUNCH_SCRIPT", "")
         launch_args       = autostart_cfg.get("LAUNCH_ARGS", "")
+        launch_cwd_cfg    = autostart_cfg.get("LAUNCH_CWD", "")
         startup_delay     = autostart_cfg.get("STARTUP_DELAY", "10")
 
         launch_script = ""
+        launch_cwd = ""
         if launch_script_rel:
             launch_script = os.path.join(os.path.expanduser(repo_dir), launch_script_rel)
             if not dry_run and not os.path.exists(launch_script):
                 _print(f"  WARNING: LAUNCH_SCRIPT does not exist: {launch_script}")
                 _print("  The repo may not have been cloned yet, or the path is wrong.")
+
+            # LAUNCH_CWD: the script is cwd-sensitive, so the working directory
+            # is configurable. Absolute (or ~) paths are used as-is; relative
+            # paths resolve against the repo dir. Default: the script's own dir.
+            if launch_cwd_cfg:
+                expanded = os.path.expanduser(launch_cwd_cfg)
+                if os.path.isabs(expanded):
+                    launch_cwd = expanded
+                else:
+                    launch_cwd = os.path.join(os.path.expanduser(repo_dir), expanded)
+                launch_cwd = os.path.normpath(launch_cwd)
+                if not dry_run and not os.path.isdir(launch_cwd):
+                    _print(f"  WARNING: LAUNCH_CWD does not exist: {launch_cwd}")
+            else:
+                launch_cwd = os.path.dirname(launch_script)
+
             _print(f"  Launch script: {launch_script}")
             _print(f"  Launch args: {launch_args}")
+            _print(f"  Launch cwd: {launch_cwd}")
             _print(f"  Python interpreter: {sys.executable}")
 
         home        = os.path.expanduser("~")
@@ -512,13 +531,14 @@ def step_autostart(autostart_cfg, bookmarks_section, repo_dir):
             lines += ["    sleep 2", "}"]
 
         if launch_script:
-            script_dir_path = os.path.dirname(launch_script)
-            script_basename = os.path.basename(launch_script)
+            # Run from launch_cwd; reference the script by a path relative to it
+            # so the command works regardless of where cwd lands.
+            script_from_cwd = os.path.relpath(launch_script, launch_cwd)
             lines += [
                 "",
                 f"# App launcher (python: {sys.executable})",
-                f'cd "{script_dir_path}"',
-                f'exec "{sys.executable}" "{script_basename}" {launch_args}',
+                f'cd "{launch_cwd}"',
+                f'exec "{sys.executable}" "{script_from_cwd}" {launch_args}',
             ]
 
         script_content = "\n".join(lines) + "\n"

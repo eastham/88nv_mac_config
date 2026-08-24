@@ -81,8 +81,16 @@ to use the repo's default branch.
 | OPEN_CHROME_BOOKMARK_2 | PTS                                                                    |
 | OPEN_CHROME_BOOKMARK_3 | Parking grid                                                           |
 | LAUNCH_SCRIPT          | src/applications/stripview/controller.py                                                      |
-| LAUNCH_ARGS            | -- --rules ../../../examples/88nv/stripview_ui.yaml --ipaddr boxone --port 30006 --db-logic examples/88nv/brc_db_logic.py |
+| LAUNCH_ARGS            | -- --rules examples/88nv/stripview_ui.yaml --ipaddr boxone --port 30006 --db-logic examples/88nv/brc_db_logic.py |
+| LAUNCH_CWD             | ~/git-mac/adsb_actions                                                 |
 | STARTUP_DELAY          | 10                                                                     |
+
+`LAUNCH_SCRIPT`: path to the script, relative to `REPO_DIR`.
+
+`LAUNCH_CWD`: working directory to `cd` into before launching — the script is
+cwd-sensitive, so any relative paths in `LAUNCH_ARGS` are resolved from here.
+Absolute paths (and `~`) are used as-is; a relative value resolves against
+`REPO_DIR`. Leave blank or omit to use the script's own directory.
 
 ---
 
