@@ -96,8 +96,13 @@ Absolute paths (and `~`) are used as-is; a relative value resolves against
 
 ## Bookmarks
 
-These URLs are added to Safari's bookmarks bar. Labels should be short and
+These URLs are added to the bookmarks bar in both Safari and Chrome. In Chrome
+they go into a folder named `88NV` at the left edge of the bar; re-running setup
+replaces that folder rather than duplicating entries. Labels should be short and
 descriptive — ATC volunteers use these to quickly reach operational resources.
+
+The labels are also how the Autostart section names the pages to open at login,
+so a label used by `OPEN_CHROME_BOOKMARK_*` must match a row here exactly.
 
 | URL                      | Label         |
 |--------------------------|---------------|

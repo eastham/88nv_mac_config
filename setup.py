@@ -17,11 +17,15 @@ Options:
 import argparse
 import datetime
 import getpass
+import hashlib
+import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
+import uuid
 try:
     from markdown_it import MarkdownIt
 except ImportError:
@@ -30,6 +34,13 @@ except ImportError:
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG = os.path.join(SCRIPT_DIR, "config.md")
+
+# Seconds to let Chrome's profile singleton initialize after the process
+# appears, before handing it additional URLs. Too short and the handoffs are
+# dropped at cold boot and only the first window opens.
+CHROME_SETTLE_SECS = 5
+# Seconds between successive URL handoffs to the running Chrome instance.
+CHROME_HANDOFF_SECS = 3
 
 # ── logging ──────────────────────────────────────────────────────────────────
 
@@ -445,6 +456,251 @@ def step_safari_bookmarks(bookmarks):
     return ok
 
 
+# Chrome bookmark folder that 88NV-managed bookmarks live in. Keeping them in a
+# named folder means re-runs replace the folder wholesale instead of trying to
+# reconcile individual entries against whatever else is on the user's bar.
+CHROME_FOLDER_NAME = "88NV"
+
+
+def _chrome_checksum(roots):
+    """Recompute the checksum Chrome stores alongside its bookmarks.
+
+    Chrome validates this on load and silently drops the bookmark tree if it
+    doesn't match, so it has to be rebuilt after any edit. The construction is
+    Chrome's own: ids and type tags as UTF-8, names as UTF-16LE, depth-first
+    over bookmark_bar, other, then synced.
+    """
+    md5 = hashlib.md5()
+
+    def digest(node):
+        node_type = node.get("type")
+        if node_type == "url":
+            md5.update(node["id"].encode())
+            md5.update(node["name"].encode("utf-16-le"))
+            md5.update(b"url")
+            md5.update(node["url"].encode())
+        elif node_type == "folder":
+            md5.update(node["id"].encode())
+            md5.update(node["name"].encode("utf-16-le"))
+            md5.update(b"folder")
+            for child in node.get("children", []):
+                digest(child)
+
+    for key in ("bookmark_bar", "other", "synced"):
+        if key in roots:
+            digest(roots[key])
+    return md5.hexdigest()
+
+
+def _chrome_max_id(roots):
+    """Highest numeric id in the tree; new nodes must not collide with it."""
+    highest = 0
+
+    def walk(node):
+        nonlocal highest
+        node_id = node.get("id", "")
+        if node_id.isdigit():
+            highest = max(highest, int(node_id))
+        for child in node.get("children", []) or []:
+            walk(child)
+
+    for root in roots.values():
+        walk(root)
+    return highest
+
+
+def _chrome_timestamp():
+    """Chrome epoch: microseconds since 1601-01-01 UTC."""
+    epoch_delta = 11644473600  # seconds between 1601-01-01 and 1970-01-01
+    return str(int((time.time() + epoch_delta) * 1_000_000))
+
+
+def step_chrome_bookmarks(bookmarks):
+    _print("\n════════════════════════════════════════")
+    _print("  [chrome-bookmarks] Setting Chrome bookmarks")
+    _print("════════════════════════════════════════")
+    ok = True
+    try:
+        import shutil
+
+        chrome_dir = os.path.expanduser(
+            "~/Library/Application Support/Google/Chrome")
+        if not os.path.isdir(chrome_dir):
+            _print("  WARNING: Chrome profile not found — Chrome may not have launched yet.")
+            _print("  Launch Chrome once, then re-run with:  --only chrome-bookmarks")
+            step_banner("chrome-bookmarks", True)
+            return True
+
+        # A machine with more than one Chrome profile keeps bookmarks per
+        # profile, and writing to "Default" on such a machine puts them
+        # somewhere the operator never looks. Local State records which profile
+        # Chrome opens by default; fall back to Default when it can't be read
+        # (fresh install, unreadable JSON), which is the only profile there.
+        profile_name = "Default"
+        local_state_path = os.path.join(chrome_dir, "Local State")
+        if os.path.exists(local_state_path):
+            try:
+                with open(local_state_path, "r", encoding="utf-8") as f:
+                    local_state = json.load(f)
+                profile_cfg = local_state.get("profile", {})
+                candidate = (profile_cfg.get("last_used")
+                             or (profile_cfg.get("last_active_profiles") or [None])[0])
+                if candidate and os.path.isdir(os.path.join(chrome_dir, candidate)):
+                    profile_name = candidate
+            except (ValueError, OSError) as e:
+                _print(f"  Could not read Local State ({e}) — using '{profile_name}' profile")
+
+        profile_dir = os.path.join(chrome_dir, profile_name)
+        bookmarks_path = os.path.join(profile_dir, "Bookmarks")
+        _print(f"  Using Chrome profile: {profile_name}")
+
+        if not os.path.isdir(profile_dir):
+            _print(f"  WARNING: Chrome profile dir not found: {profile_dir}")
+            _print("  Launch Chrome once, then re-run with:  --only chrome-bookmarks")
+            step_banner("chrome-bookmarks", True)
+            return True
+
+        # Chrome holds bookmarks in memory and rewrites the file on exit, so a
+        # running instance would clobber anything written here.
+        chrome_was_running = subprocess.run(
+            ["pgrep", "-x", "Google Chrome"],
+            capture_output=True).returncode == 0
+        if chrome_was_running:
+            if dry_run:
+                _print("  [dry-run] Chrome is running — would quit it before writing")
+            else:
+                _print("  Chrome is running — quitting it so it can't overwrite our changes")
+                run(["osascript", "-e", 'quit app "Google Chrome"'], check=False)
+                for _ in range(20):
+                    still_up = subprocess.run(
+                        ["pgrep", "-x", "Google Chrome"],
+                        capture_output=True).returncode == 0
+                    if not still_up:
+                        break
+                    time.sleep(0.5)
+                else:
+                    _print("  WARNING: Chrome did not quit — forcing it")
+                    run(["killall", "Google Chrome"], check=False)
+                    time.sleep(1)
+
+        if not os.path.exists(bookmarks_path):
+            # A fresh profile has no Bookmarks file until the first bookmark is
+            # made; synthesize the minimal tree Chrome expects.
+            _print("  No Bookmarks file yet — creating one")
+            data = {"roots": {}, "version": 1}
+        else:
+            backup_path = bookmarks_path + ".88nv_backup"
+            shutil.copy2(bookmarks_path, backup_path)
+            _print(f"  Backed up to {backup_path}")
+            with open(bookmarks_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Confirm our checksum construction matches the Chrome on THIS
+            # machine before relying on it. If a future Chrome changes the
+            # format, writing a checksum it rejects makes it discard the entire
+            # bookmark bar — so bail out with the file untouched instead.
+            stored = data.get("checksum")
+            if stored and _chrome_checksum(data.get("roots", {})) != stored:
+                _print("  ERROR: Chrome's bookmark checksum format is not the one this")
+                _print("  script knows how to write (Chrome may have changed it).")
+                _print("  Refusing to write — bookmarks left untouched.")
+                step_banner("chrome-bookmarks", False)
+                return False
+
+        roots = data.setdefault("roots", {})
+        for key in ("bookmark_bar", "other", "synced"):
+            roots.setdefault(key, {
+                "children": [],
+                "date_added": _chrome_timestamp(),
+                "date_modified": "0",
+                "guid": str(uuid.uuid4()),
+                "id": "",
+                "name": key,
+                "type": "folder",
+            })
+
+        next_id = _chrome_max_id(roots) + 1
+        for key in ("bookmark_bar", "other", "synced"):
+            if not roots[key].get("id"):
+                roots[key]["id"] = str(next_id)
+                next_id += 1
+
+        bar = roots["bookmark_bar"]
+        bar_children = bar.get("children", [])
+
+        # Drop any previous 88NV folder so re-runs replace rather than duplicate.
+        before = len(bar_children)
+        bar_children = [c for c in bar_children
+                        if not (c.get("type") == "folder"
+                                and c.get("name") == CHROME_FOLDER_NAME)]
+        if len(bar_children) != before:
+            _print(f"  Removed existing '{CHROME_FOLDER_NAME}' folder from bookmarks bar")
+
+        now = _chrome_timestamp()
+        entries = []
+        for url, label in bookmarks:
+            entries.append({
+                "date_added": now,
+                "date_last_used": "0",
+                "guid": str(uuid.uuid4()),
+                "id": str(next_id),
+                "name": label,
+                "type": "url",
+                "url": url,
+            })
+            next_id += 1
+            _print(f"    {label}: {url}")
+
+        folder = {
+            "children": entries,
+            "date_added": now,
+            "date_last_used": "0",
+            "date_modified": now,
+            "guid": str(uuid.uuid4()),
+            "id": str(next_id),
+            "name": CHROME_FOLDER_NAME,
+            "type": "folder",
+        }
+        next_id += 1
+
+        # Prepend so the folder lands at the left edge of the bar, where it
+        # stays visible no matter how many other bookmarks the user has.
+        bar_children.insert(0, folder)
+        bar["children"] = bar_children
+        bar["date_modified"] = now
+
+        data["checksum"] = _chrome_checksum(roots)
+        data["version"] = data.get("version", 1)
+
+        # sync_metadata describes the pre-edit tree; leaving it in place makes
+        # Chrome try to reconcile against state that no longer exists, which can
+        # undo the edit. Dropping it forces a clean re-sync.
+        data.pop("sync_metadata", None)
+
+        if not dry_run:
+            tmp_path = bookmarks_path + ".88nv_tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=3)
+            os.replace(tmp_path, bookmarks_path)
+            # Chrome prefers Bookmarks.bak on a checksum failure; a stale one
+            # would resurrect the old bar, so retire it.
+            stale_bak = bookmarks_path + ".bak"
+            if os.path.exists(stale_bak):
+                os.remove(stale_bak)
+            _print(f"  {len(bookmarks)} bookmarks written to Chrome "
+                   f"'{CHROME_FOLDER_NAME}' folder on the bookmarks bar")
+        else:
+            _print(f"  [dry-run] Would write {len(bookmarks)} bookmarks to Chrome "
+                   f"'{CHROME_FOLDER_NAME}' folder (Chrome not quit)")
+
+        _print("  NOTE: Show the bar with View → Always Show Bookmarks Bar (⇧⌘B)")
+    except Exception as e:
+        _print(f"  ERROR: {e}")
+        ok = False
+    step_banner("chrome-bookmarks", ok)
+    return ok
+
+
 def step_autostart(autostart_cfg, bookmarks_section, repo_dir):
     _print("\n════════════════════════════════════════")
     _print("  [autostart] Configuring login autostart")
@@ -519,16 +775,34 @@ def step_autostart(autostart_cfg, bookmarks_section, repo_dir):
         ]
 
         if chrome_urls:
+            # Only the first `open -n` actually launches Chrome; the rest hand
+            # their URL to the running instance via the profile singleton. At
+            # cold boot that instance is still starting up, and handoffs that
+            # arrive too early get dropped — which is why only one window
+            # appeared. So: launch the first URL, poll until the process is up,
+            # let the singleton settle, then hand off the rest with wider gaps.
             lines += [
                 "",
                 "# Chrome windows — pgrep guard skips opening if Chrome is already running",
                 'pgrep -x "Google Chrome" > /dev/null || {',
+                f'    open -na "Google Chrome" --args --new-window "{chrome_urls[0]}"',
             ]
-            for i, url in enumerate(chrome_urls):
-                lines.append(f'    open -na "Google Chrome" --args --new-window "{url}"')
-                if i < len(chrome_urls) - 1:
-                    lines.append("    sleep 1")
-            lines += ["    sleep 2", "}"]
+            if len(chrome_urls) > 1:
+                lines += [
+                    "    # Wait for Chrome to come up before handing off more URLs",
+                    "    for _ in $(seq 1 30); do",
+                    '        pgrep -x "Google Chrome" > /dev/null && break',
+                    "        sleep 1",
+                    "    done",
+                    "    # Let the singleton finish initializing so handoffs aren't dropped",
+                    f"    sleep {CHROME_SETTLE_SECS}",
+                ]
+                for url in chrome_urls[1:]:
+                    lines.append(f'    open -na "Google Chrome" --args --new-window "{url}"')
+                    lines.append(f"    sleep {CHROME_HANDOFF_SECS}")
+            else:
+                lines.append(f"    sleep {CHROME_HANDOFF_SECS}")
+            lines.append("}")
 
         if launch_script:
             # Run from launch_cwd; reference the script by a path relative to it
@@ -599,7 +873,7 @@ def step_autostart(autostart_cfg, bookmarks_section, repo_dir):
 # ── main ──────────────────────────────────────────────────────────────────────
 
 ALL_STEPS = ["network", "hostname", "hosts", "repo", "pip",
-             "vnc", "bookmarks", "autostart"]
+             "vnc", "bookmarks", "chrome-bookmarks", "autostart"]
 
 
 def main():
@@ -748,6 +1022,10 @@ def main():
     # ── Safari bookmarks ──
     if should_run("bookmarks"):
         results["bookmarks"] = step_safari_bookmarks(bookmarks)
+
+    # ── Chrome bookmarks ──
+    if should_run("chrome-bookmarks"):
+        results["chrome-bookmarks"] = step_chrome_bookmarks(bookmarks)
 
     # ── Autostart ──
     autostart_cfg = config.get("Autostart", {})
