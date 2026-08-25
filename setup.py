@@ -42,6 +42,11 @@ CHROME_SETTLE_SECS = 5
 # Seconds between successive URL handoffs to the running Chrome instance.
 CHROME_HANDOFF_SECS = 3
 
+# Seconds to wait for `launchctl bootout` to finish removing the service before
+# bootstrapping it again. launchd allows a job 5s to honor SIGTERM before it
+# SIGKILLs, so this must exceed that.
+LAUNCHCTL_BOOTOUT_TIMEOUT = 15
+
 # ── logging ──────────────────────────────────────────────────────────────────
 
 log_path = None
@@ -851,8 +856,32 @@ def step_autostart(autostart_cfg, bookmarks_section, repo_dir):
         # ── Load the LaunchAgent ──────────────────────────────────────────────
         if not dry_run:
             uid = str(os.getuid())
-            run(["launchctl", "bootout", f"gui/{uid}/com.88nv.autostart"], check=False)
-            run(["launchctl", "bootstrap", f"gui/{uid}", plist_path])
+            label = "com.88nv.autostart"
+            service = f"gui/{uid}/{label}"
+
+            # bootout is asynchronous. If the running job ignores SIGTERM — the
+            # launcher execs a GUI app, which does — launchd waits 5s before
+            # SIGKILLing it. Bootstrapping inside that teardown window fails
+            # with "Bootstrap failed 5: Input/output error", so poll until the
+            # service is really gone from the domain before loading it again.
+            run(["launchctl", "bootout", service], check=False)
+            for _ in range(LAUNCHCTL_BOOTOUT_TIMEOUT):
+                probe = run(["launchctl", "print", service],
+                            capture=True, check=False)
+                if probe.returncode != 0:
+                    break
+                time.sleep(1)
+            else:
+                _print(f"  WARNING: {label} still loaded after "
+                       f"{LAUNCHCTL_BOOTOUT_TIMEOUT}s — bootstrap may fail")
+
+            boot = run(["launchctl", "bootstrap", f"gui/{uid}", plist_path],
+                       capture=True, check=False)
+            if boot.returncode != 0:
+                _print(f"  ERROR: launchctl bootstrap failed (rc={boot.returncode})")
+                for stream in (boot.stdout, boot.stderr):
+                    if stream and stream.strip():
+                        _print(f"    {stream.strip()}")
 
             result = run(["launchctl", "list", "com.88nv.autostart"], capture=True, check=False)
             if result.returncode == 0 and "com.88nv.autostart" in result.stdout:
